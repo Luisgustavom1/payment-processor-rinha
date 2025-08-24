@@ -1,0 +1,181 @@
+package payment
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"time"
+
+	models "github.com/payment-processor-rinha/internal/application/payment/models"
+	"github.com/redis/go-redis/v9"
+)
+
+type HealthCheckResponse struct {
+	Failing         bool `json:"failing"`
+	MinResponseTime int  `json:"minResponseTime"`
+}
+
+type PaymentProcessor struct {
+	client      *http.Client
+	cache       *redis.Client
+	defaultURL  string
+	fallbackURL string
+	defaultUp   bool
+}
+
+func InitPaymentProcessor(cache *redis.Client) *PaymentProcessor {
+	return &PaymentProcessor{
+		client:      &http.Client{},
+		cache:       cache,
+		defaultURL:  os.Getenv("PROCESSOR_DEFAULT_URL"),
+		fallbackURL: os.Getenv("PROCESSOR_FALLBACK_URL"),
+		defaultUp:   true,
+	}
+}
+
+func (p *PaymentProcessor) ProcessPayment(ctx context.Context, input *models.PaymentProcessed) (*models.PaymentProcessed, error) {
+	tries := 0
+	now := time.Now()
+	input.RequestedAt = now.Format(time.RFC3339)
+
+	jsonData, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+
+	p.defaultUp = true
+	res := &http.Response{}
+	for tries <= 3 { // 2 tries to default + 2 tries do fallback
+		res, err = p.client.Post(p.baseURL()+"/payments", "application/json", bytes.NewBuffer(jsonData))
+		if err != nil {
+			return nil, err
+		}
+		defer res.Body.Close()
+
+		if res.StatusCode == http.StatusOK {
+			result, err := p.savePayment(ctx, now, input)
+			if err != nil {
+				return result, err
+			}
+			return input, nil
+		}
+
+		if !p.isRetryableError(res.StatusCode) {
+			return nil, fmt.Errorf("processing error status: %s", res.Status)
+		}
+
+		if !p.defaultUp && tries == 1 {
+			p.defaultUp = false
+		}
+
+		tries++
+		fmt.Println("retrying payment, attempt:", tries)
+	}
+
+	return nil, fmt.Errorf("failed to process payment: %s", res.Status)
+}
+
+func (p *PaymentProcessor) SummaryPayments(ctx context.Context, from, to int64) (*models.PaymentsSummaryResponse, error) {
+	res := models.PaymentsSummaryResponse{}
+
+	keys, err := p.cache.ZRangeByScore(ctx, p.getPaymentsIndexKey(), &redis.ZRangeBy{
+		Min: fmt.Sprint(from),
+		Max: fmt.Sprint(to),
+	}).Result()
+	if err != nil {
+		fmt.Println(err)
+		return nil, fmt.Errorf("failed to get payments to summarize")
+	}
+
+	if len(keys) == 0 {
+		return &res, nil
+	}
+
+	results, err := p.cache.MGet(ctx, keys...).Result()
+	if err != nil {
+		fmt.Println(err)
+		return nil, fmt.Errorf("failed to get payments")
+	}
+
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		payment := models.PaymentProcessed{}
+		err := json.Unmarshal([]byte(result.(string)), &payment)
+		if err != nil {
+			continue
+		}
+
+		if payment.OnDefault {
+			res.Default.TotalRequests++
+			res.Default.TotalAmount += payment.Amount
+			continue
+		}
+
+		res.Fallback.TotalRequests++
+		res.Fallback.TotalAmount += payment.Amount
+	}
+
+	return &res, nil
+}
+
+func (p *PaymentProcessor) HealthCheck() (*HealthCheckResponse, error) {
+	resp, err := p.client.Get(p.baseURL() + "/payments/service-health")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	healthCheckRes := HealthCheckResponse{}
+	if err := json.NewDecoder(resp.Body).Decode(&healthCheckRes); err != nil {
+		return nil, err
+	}
+	return &healthCheckRes, nil
+}
+
+func (p *PaymentProcessor) baseURL() string {
+	if p.defaultUp {
+		return p.defaultURL
+	}
+	return p.fallbackURL
+}
+
+func (p *PaymentProcessor) getPaymentKey(correlationId *string) string {
+	if correlationId == nil {
+		return "payments:*"
+	}
+	return "payments:" + *correlationId
+}
+
+func (p *PaymentProcessor) getPaymentsIndexKey() string {
+	return "payments:by-date"
+}
+
+func (p *PaymentProcessor) savePayment(ctx context.Context, now time.Time, payload *models.PaymentProcessed) (*models.PaymentProcessed, error) {
+	payload.OnDefault = p.defaultUp
+	j, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("error on marshalling processed payment: %w", err)
+	}
+
+	k := p.getPaymentKey(&payload.CorrelationId)
+	pipe := p.cache.TxPipeline()
+	pipe.Set(ctx, k, j, 0)
+	pipe.ZAdd(ctx, p.getPaymentsIndexKey(), redis.Z{
+		Score:  float64(now.Unix()),
+		Member: k,
+	})
+	_, err = pipe.Exec(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error on saving processed payments: %w", err)
+	}
+	return nil, nil
+}
+
+func (p *PaymentProcessor) isRetryableError(statusCode int) bool {
+	return statusCode/100 == 5
+}
