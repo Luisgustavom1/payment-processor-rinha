@@ -46,9 +46,15 @@ type PaymentLedger struct {
 
 var PAYMENTS_SUMMARY = PaymentsLedger{}
 
+func isRetryableError(statusCode int) bool {
+	return statusCode/100 == 5
+}
+
 type PaymentProcessorClient struct {
-	client  *http.Client
-	baseURL string
+	client      *http.Client
+	defaultURL  string
+	fallbackURL string
+	defaultUp   bool
 }
 
 func main() {
@@ -68,13 +74,22 @@ func main() {
 
 func initPaymentProcessorClient() *PaymentProcessorClient {
 	return &PaymentProcessorClient{
-		client:  &http.Client{},
-		baseURL: os.Getenv("PROCESSOR_DEFAULT_URL"),
+		client:      &http.Client{},
+		defaultURL:  os.Getenv("PROCESSOR_DEFAULT_URL"),
+		fallbackURL: os.Getenv("PROCESSOR_FALLBACK_URL"),
+		defaultUp:   true,
 	}
 }
 
+func (c *PaymentProcessorClient) baseURL() string {
+	if c.defaultUp {
+		return c.defaultURL
+	}
+	return c.fallbackURL
+}
+
 func (c *PaymentProcessorClient) HealthCheck() (*HealthCheckRes, error) {
-	resp, err := c.client.Get(c.baseURL + "/payments/service-health")
+	resp, err := c.client.Get(c.baseURL() + "/payments/service-health")
 	if err != nil {
 		return nil, err
 	}
@@ -88,23 +103,32 @@ func (c *PaymentProcessorClient) HealthCheck() (*HealthCheckRes, error) {
 }
 
 func (c *PaymentProcessorClient) ProcessPayment(req *PaymentRequest) (*http.Response, error) {
+	tries := 0
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 
-	res, err := c.client.Post(c.baseURL+"/payments", "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
+	res := &http.Response{}
+	for tries <= 3 { // 2 tries to default + 2 tries do fallback
+		res, err = c.client.Post(c.baseURL()+"/payments", "application/json", bytes.NewBuffer(jsonData))
+		if err != nil {
+			return nil, err
+		}
+		defer res.Body.Close()
 
-	if res.StatusCode == http.StatusOK {
-		PAYMENTS_SUMMARY.Payments = append(PAYMENTS_SUMMARY.Payments, PaymentLedger{
-			IsDefault:      true,
-			PaymentRequest: *req,
-		})
-		return res, nil
+		if res.StatusCode == http.StatusOK {
+			PAYMENTS_SUMMARY.Payments = append(PAYMENTS_SUMMARY.Payments, PaymentLedger{
+				IsDefault:      true,
+				PaymentRequest: *req,
+			})
+			return res, nil
+		}
+
+		if isRetryableError(res.StatusCode) && tries == 1 {
+			c.defaultUp = false
+		}
+		tries++
 	}
 
 	er := ErrorResponse{}
