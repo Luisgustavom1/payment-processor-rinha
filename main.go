@@ -24,14 +24,9 @@ type ProcessPaymentPayload struct {
 	Amount        float64 `json:"amount"`
 }
 
-type ProcessPaymentInput struct {
-	CorrelationId string  `json:"correlationId"`
-	Amount        float64 `json:"amount"`
-}
-
 type PaymentProcessed struct {
-	Payment   ProcessPaymentPayload `json:"payment"`
-	OnDefault bool                  `json:"onDefault"`
+	ProcessPaymentPayload
+	OnDefault bool `json:"onDefault"`
 }
 
 type PaymentsSummary struct {
@@ -128,15 +123,12 @@ func (c *PaymentProcessorClient) getPaymentsIndexKey() string {
 	return "payments:by-date"
 }
 
-func (c *PaymentProcessorClient) ProcessPayment(ctx context.Context, input *ProcessPaymentInput) (*ProcessPaymentPayload, error) {
+func (c *PaymentProcessorClient) ProcessPayment(ctx context.Context, input *PaymentProcessed) (*PaymentProcessed, error) {
 	tries := 0
 	now := time.Now()
-	payload := ProcessPaymentPayload{
-		RequestedAt:   now.Format(time.RFC3339),
-		CorrelationId: input.CorrelationId,
-		Amount:        input.Amount,
-	}
-	jsonData, err := json.Marshal(payload)
+	input.RequestedAt = now.Format(time.RFC3339)
+
+	jsonData, err := json.Marshal(input)
 	if err != nil {
 		return nil, err
 	}
@@ -151,11 +143,11 @@ func (c *PaymentProcessorClient) ProcessPayment(ctx context.Context, input *Proc
 		defer res.Body.Close()
 
 		if res.StatusCode == http.StatusOK {
-			result, err := c.savePayment(ctx, now, payload)
+			result, err := c.savePayment(ctx, now, input)
 			if err != nil {
 				return result, err
 			}
-			return &payload, nil
+			return input, nil
 		}
 
 		if !isRetryableError(res.StatusCode) {
@@ -167,17 +159,15 @@ func (c *PaymentProcessorClient) ProcessPayment(ctx context.Context, input *Proc
 		}
 
 		tries++
+		fmt.Println("retrying payment, attempt:", tries)
 	}
 
-	return nil, fmt.Errorf("processing error status: %s", res.Status)
+	return nil, fmt.Errorf("failed to process payment: %s", res.Status)
 }
 
-func (c *PaymentProcessorClient) savePayment(ctx context.Context, now time.Time, payload ProcessPaymentPayload) (*ProcessPaymentPayload, error) {
-	// TODO: try not marshal payload two time, here and previous when send to the api
-	j, err := json.Marshal(PaymentProcessed{
-		Payment:   payload,
-		OnDefault: c.defaultUp,
-	})
+func (c *PaymentProcessorClient) savePayment(ctx context.Context, now time.Time, payload *PaymentProcessed) (*PaymentProcessed, error) {
+	payload.OnDefault = c.defaultUp
+	j, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("error on marshalling processed payment: %w", err)
 	}
@@ -209,7 +199,7 @@ func paymentHandler(c *PaymentProcessorClient) http.HandlerFunc {
 		}
 		defer r.Body.Close()
 
-		input := ProcessPaymentInput{}
+		input := PaymentProcessed{}
 		err := json.NewDecoder(r.Body).Decode(&input)
 		if err != nil {
 			http.Error(w, "Invalid request payload: "+err.Error(), http.StatusBadRequest)
@@ -283,12 +273,12 @@ func paymentsSummaryHandler(c *PaymentProcessorClient) http.HandlerFunc {
 
 			if payment.OnDefault {
 				res.Default.TotalRequests++
-				res.Default.TotalAmount += payment.Payment.Amount
+				res.Default.TotalAmount += payment.Amount
 				continue
 			}
 
 			res.Fallback.TotalRequests++
-			res.Fallback.TotalAmount += payment.Payment.Amount
+			res.Fallback.TotalAmount += payment.Amount
 		}
 
 		json.NewEncoder(w).Encode(res)
