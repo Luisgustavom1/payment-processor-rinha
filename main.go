@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -22,6 +21,22 @@ type PaymentRequest struct {
 	Amount        float64 `json:"amount"`
 }
 
+type ErrorResponse struct {
+	Message string `json:"message"`
+}
+
+type PaymentSummary struct {
+	TotalRequests int     `json:"totalRequests"`
+	TotalAmount   float64 `json:"totalAmount"`
+}
+
+type AllPaymentsSummary struct {
+	Default  PaymentSummary `json:"default"`
+	Fallback PaymentSummary `json:"fallback"`
+}
+
+var PAYMENTS_SUMMARY = AllPaymentsSummary{}
+
 type PaymentProcessorClient struct {
 	client  *http.Client
 	baseURL string
@@ -31,6 +46,7 @@ func main() {
 	client := initPaymentProcessorClient()
 
 	http.HandleFunc("/payments", paymentHandler(client))
+	http.HandleFunc("/payments-summary", paymentsSummaryHandler())
 
 	healthCheckRes, err := client.HealthCheck()
 	if err != nil {
@@ -68,20 +84,26 @@ func (c *PaymentProcessorClient) ProcessPayment(req *PaymentRequest) (*http.Resp
 		return nil, err
 	}
 
-	println(string(jsonData))
-	resp, err := c.client.Post(c.baseURL+"/payments", "application/json", bytes.NewBuffer(jsonData))
+	res, err := c.client.Post(c.baseURL+"/payments", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer res.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
+	if res.StatusCode == http.StatusOK {
+		PAYMENTS_SUMMARY.Default.TotalRequests++
+		PAYMENTS_SUMMARY.Default.TotalAmount += req.Amount
+		return res, nil
+	}
+
+	var er ErrorResponse
+	if err := json.NewDecoder(res.Body).Decode(&er); err != nil {
+		fmt.Println("Failed to decode error response:", err)
 		return nil, err
 	}
-	fmt.Println(string(body))
+	err = fmt.Errorf("%s", er.Message)
+	return nil, err
 
-	return resp, nil
 }
 
 func paymentHandler(c *PaymentProcessorClient) http.HandlerFunc {
@@ -101,13 +123,25 @@ func paymentHandler(c *PaymentProcessorClient) http.HandlerFunc {
 		}
 		p.RequestedAt = time.Now().Format(time.RFC3339)
 
-		resp, err := c.ProcessPayment(&p)
+		_, err = c.ProcessPayment(&p)
 		if err != nil {
+			fmt.Println("Payment processing error:", err)
 			http.Error(w, "Failed to process payment", http.StatusInternalServerError)
 			return
 		}
-		defer resp.Body.Close()
 
 		fmt.Fprintf(w, "Payment request received: %+v", p.RequestedAt)
+	}
+}
+
+func paymentsSummaryHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		json.NewEncoder(w).Encode(PAYMENTS_SUMMARY)
 	}
 }
