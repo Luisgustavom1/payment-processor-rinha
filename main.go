@@ -25,17 +25,26 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
-type PaymentSummary struct {
+type PaymentsSummary struct {
 	TotalRequests int     `json:"totalRequests"`
 	TotalAmount   float64 `json:"totalAmount"`
 }
 
-type AllPaymentsSummary struct {
-	Default  PaymentSummary `json:"default"`
-	Fallback PaymentSummary `json:"fallback"`
+type PaymentsSummaryResponse struct {
+	Default  PaymentsSummary `json:"default"`
+	Fallback PaymentsSummary `json:"fallback"`
 }
 
-var PAYMENTS_SUMMARY = AllPaymentsSummary{}
+type PaymentsLedger struct {
+	Payments []PaymentLedger `json:"payments"`
+}
+
+type PaymentLedger struct {
+	IsDefault      bool           `json:"isDefault"`
+	PaymentRequest PaymentRequest `json:"paymentRequest"`
+}
+
+var PAYMENTS_SUMMARY = PaymentsLedger{}
 
 type PaymentProcessorClient struct {
 	client  *http.Client
@@ -71,7 +80,7 @@ func (c *PaymentProcessorClient) HealthCheck() (*HealthCheckRes, error) {
 	}
 	defer resp.Body.Close()
 
-	var healthCheckRes HealthCheckRes
+	healthCheckRes := HealthCheckRes{}
 	if err := json.NewDecoder(resp.Body).Decode(&healthCheckRes); err != nil {
 		return nil, err
 	}
@@ -91,12 +100,14 @@ func (c *PaymentProcessorClient) ProcessPayment(req *PaymentRequest) (*http.Resp
 	defer res.Body.Close()
 
 	if res.StatusCode == http.StatusOK {
-		PAYMENTS_SUMMARY.Default.TotalRequests++
-		PAYMENTS_SUMMARY.Default.TotalAmount += req.Amount
+		PAYMENTS_SUMMARY.Payments = append(PAYMENTS_SUMMARY.Payments, PaymentLedger{
+			IsDefault:      true,
+			PaymentRequest: *req,
+		})
 		return res, nil
 	}
 
-	var er ErrorResponse
+	er := ErrorResponse{}
 	if err := json.NewDecoder(res.Body).Decode(&er); err != nil {
 		fmt.Println("Failed to decode error response:", err)
 		return nil, err
@@ -115,7 +126,7 @@ func paymentHandler(c *PaymentProcessorClient) http.HandlerFunc {
 		}
 		defer r.Body.Close()
 
-		var p PaymentRequest
+		p := PaymentRequest{}
 		err := json.NewDecoder(r.Body).Decode(&p)
 		if err != nil {
 			http.Error(w, "Invalid request payload: "+err.Error(), http.StatusBadRequest)
@@ -141,7 +152,38 @@ func paymentsSummaryHandler() http.HandlerFunc {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		q := r.URL.Query()
 
-		json.NewEncoder(w).Encode(PAYMENTS_SUMMARY)
+		from := parseRequestedAt(q.Get("from"))
+		to := parseRequestedAt(q.Get("to"))
+
+		res := PaymentsSummaryResponse{}
+
+		for _, payment := range PAYMENTS_SUMMARY.Payments {
+			requestedAt := parseRequestedAt(payment.PaymentRequest.RequestedAt)
+			if requestedAt.Before(from) || requestedAt.After(to) {
+				continue
+			}
+
+			if payment.IsDefault {
+				res.Default.TotalRequests++
+				res.Default.TotalAmount += payment.PaymentRequest.Amount
+				continue
+			}
+
+			res.Fallback.TotalRequests++
+			res.Fallback.TotalAmount += payment.PaymentRequest.Amount
+		}
+
+		json.NewEncoder(w).Encode(res)
 	}
+}
+
+func parseRequestedAt(reqAt string) time.Time {
+	parsedTime, err := time.Parse(time.RFC3339, reqAt)
+	if err != nil {
+		fmt.Println("Invalid 'from' date format: %v", err)
+		return time.Time{}
+	}
+	return parsedTime
 }
