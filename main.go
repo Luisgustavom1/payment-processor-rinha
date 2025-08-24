@@ -62,12 +62,18 @@ func main() {
 
 	http.HandleFunc("/payments", paymentHandler(client))
 	http.HandleFunc("/payments-summary", paymentsSummaryHandler())
-
-	healthCheckRes, err := client.HealthCheck()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(healthCheckRes)
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		healthCheckRes, err := client.HealthCheck()
+		if err != nil {
+			http.Error(w, "health check failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if healthCheckRes.Failing {
+			http.Error(w, "health check failed payment processor down", http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprintf(w, "health check OK: %+v", healthCheckRes)
+	})
 
 	log.Fatal(http.ListenAndServe(":9999", nil))
 }
@@ -133,7 +139,7 @@ func (c *PaymentProcessorClient) ProcessPayment(req *PaymentRequest) (*http.Resp
 
 	er := ErrorResponse{}
 	if err := json.NewDecoder(res.Body).Decode(&er); err != nil {
-		fmt.Println("Failed to decode error response:", err)
+		fmt.Println("failed to decode error response:", err)
 		return nil, err
 	}
 	err = fmt.Errorf("%s", er.Message)
@@ -158,14 +164,15 @@ func paymentHandler(c *PaymentProcessorClient) http.HandlerFunc {
 		}
 		p.RequestedAt = time.Now().Format(time.RFC3339)
 
+		fmt.Printf("processing:%s\n", p.CorrelationId)
 		_, err = c.ProcessPayment(&p)
 		if err != nil {
-			fmt.Println("Payment processing error:", err)
-			http.Error(w, "Failed to process payment", http.StatusInternalServerError)
+			fmt.Println("payment processing error:", err)
+			http.Error(w, "failed to process payment", http.StatusInternalServerError)
 			return
 		}
 
-		fmt.Fprintf(w, "Payment request received: %+v", p.RequestedAt)
+		fmt.Fprintf(w, "payment request received: %+v", p.RequestedAt)
 	}
 }
 
@@ -206,7 +213,7 @@ func paymentsSummaryHandler() http.HandlerFunc {
 func parseRequestedAt(reqAt string) time.Time {
 	parsedTime, err := time.Parse(time.RFC3339, reqAt)
 	if err != nil {
-		fmt.Println("Invalid 'from' date format: %v", err)
+		fmt.Printf("invalid 'from' date format: %v\n", err)
 		return time.Time{}
 	}
 	return parsedTime
