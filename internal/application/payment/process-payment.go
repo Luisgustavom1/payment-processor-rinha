@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/hibiken/asynq"
 	models "github.com/payment-processor-rinha/internal/application/payment/models"
+	tasks "github.com/payment-processor-rinha/internal/application/payment/tasks"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -26,7 +29,7 @@ type PaymentProcessor struct {
 	defaultUp   bool
 }
 
-func InitPaymentProcessor(cache *redis.Client) *PaymentProcessor {
+func NewPaymentProcessor(cache *redis.Client) *PaymentProcessor {
 	return &PaymentProcessor{
 		client:      &http.Client{},
 		cache:       cache,
@@ -36,14 +39,22 @@ func InitPaymentProcessor(cache *redis.Client) *PaymentProcessor {
 	}
 }
 
-func (p *PaymentProcessor) ProcessPayment(ctx context.Context, input *models.PaymentProcessed) (*models.PaymentProcessed, error) {
+func (p *PaymentProcessor) ProcessTask(ctx context.Context, t *asynq.Task) error {
+	input := tasks.ProcessPaymentTask{}
+	if err := json.Unmarshal(t.Payload(), &input); err != nil {
+		fmt.Println("failed to unmarshal payload:", err)
+		return err
+	}
+	log.Printf("processing payment cid %s\n", input.CorrelationId)
+
 	tries := 0
 	now := time.Now()
 	input.RequestedAt = now.Format(time.RFC3339)
 
 	jsonData, err := json.Marshal(input)
 	if err != nil {
-		return nil, err
+		fmt.Println("failed to marshal payment:", err)
+		return err
 	}
 
 	p.defaultUp = true
@@ -51,20 +62,25 @@ func (p *PaymentProcessor) ProcessPayment(ctx context.Context, input *models.Pay
 	for tries <= 3 { // 2 tries to default + 2 tries do fallback
 		res, err = p.client.Post(p.baseURL()+"/payments", "application/json", bytes.NewBuffer(jsonData))
 		if err != nil {
-			return nil, err
+			fmt.Println("failed to send request:", err)
+			return err
 		}
 		defer res.Body.Close()
 
 		if res.StatusCode == http.StatusOK {
-			result, err := p.savePayment(ctx, now, input)
+			err := p.savePayment(ctx, now, &input)
 			if err != nil {
-				return result, err
+				fmt.Println("failed to save payment:", err)
+				return err
 			}
-			return input, nil
+			fmt.Printf("payment saved %s\n", input.CorrelationId)
+			return nil
 		}
 
 		if !p.isRetryableError(res.StatusCode) {
-			return nil, fmt.Errorf("processing error status: %s", res.Status)
+			err = fmt.Errorf("processing error status: %s", res.Status)
+			fmt.Println(err)
+			return err
 		}
 
 		if !p.defaultUp && tries == 1 {
@@ -75,7 +91,7 @@ func (p *PaymentProcessor) ProcessPayment(ctx context.Context, input *models.Pay
 		fmt.Println("retrying payment, attempt:", tries)
 	}
 
-	return nil, fmt.Errorf("failed to process payment: %s", res.Status)
+	return fmt.Errorf("failed to process payment: %s", res.Status)
 }
 
 func (p *PaymentProcessor) SummaryPayments(ctx context.Context, from, to int64) (*models.PaymentsSummaryResponse, error) {
@@ -90,6 +106,7 @@ func (p *PaymentProcessor) SummaryPayments(ctx context.Context, from, to int64) 
 		return nil, fmt.Errorf("failed to get payments to summarize")
 	}
 
+	fmt.Println("found payment keys:", keys)
 	if len(keys) == 0 {
 		return &res, nil
 	}
@@ -104,7 +121,7 @@ func (p *PaymentProcessor) SummaryPayments(ctx context.Context, from, to int64) 
 		if result == nil {
 			continue
 		}
-		payment := models.PaymentProcessed{}
+		payment := tasks.ProcessPaymentTask{}
 		err := json.Unmarshal([]byte(result.(string)), &payment)
 		if err != nil {
 			continue
@@ -155,11 +172,11 @@ func (p *PaymentProcessor) getPaymentsIndexKey() string {
 	return "payments:by-date"
 }
 
-func (p *PaymentProcessor) savePayment(ctx context.Context, now time.Time, payload *models.PaymentProcessed) (*models.PaymentProcessed, error) {
+func (p *PaymentProcessor) savePayment(ctx context.Context, now time.Time, payload *tasks.ProcessPaymentTask) error {
 	payload.OnDefault = p.defaultUp
 	j, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("error on marshalling processed payment: %w", err)
+		return fmt.Errorf("error on marshalling processed payment: %w", err)
 	}
 
 	k := p.getPaymentKey(&payload.CorrelationId)
@@ -171,9 +188,9 @@ func (p *PaymentProcessor) savePayment(ctx context.Context, now time.Time, paylo
 	})
 	_, err = pipe.Exec(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("error on saving processed payments: %w", err)
+		return fmt.Errorf("error on saving processed payments: %w", err)
 	}
-	return nil, nil
+	return nil
 }
 
 func (p *PaymentProcessor) isRetryableError(statusCode int) bool {

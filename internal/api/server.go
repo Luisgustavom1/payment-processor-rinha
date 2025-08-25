@@ -7,27 +7,24 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/redis/go-redis/v9"
-
+	"github.com/hibiken/asynq"
 	paymentProcessor "github.com/payment-processor-rinha/internal/application/payment"
-	payment "github.com/payment-processor-rinha/internal/application/payment/models"
+	paymentTask "github.com/payment-processor-rinha/internal/application/payment/tasks"
 )
 
-func Setup(redisClient *redis.Client) error {
-	paymentProcessorC := paymentProcessor.InitPaymentProcessor(redisClient)
-
-	http.HandleFunc("/payments", paymentHandler(paymentProcessorC))
-	http.HandleFunc("/payments-summary", paymentsSummaryHandler(paymentProcessorC))
+func Setup(pp *paymentProcessor.PaymentProcessor, asynqClient *asynq.Client) *http.Server {
+	http.HandleFunc("/payments", paymentHandler(pp, asynqClient))
+	http.HandleFunc("/payments-summary", paymentsSummaryHandler(pp))
 
 	fmt.Println("starting server running on port 9999")
-	return http.ListenAndServe(":9999", nil)
+	return &http.Server{
+		Addr:    ":9999",
+		Handler: nil,
+	}
 }
 
-func paymentHandler(p *paymentProcessor.PaymentProcessor) http.HandlerFunc {
+func paymentHandler(p *paymentProcessor.PaymentProcessor, asynqClient *asynq.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -36,14 +33,20 @@ func paymentHandler(p *paymentProcessor.PaymentProcessor) http.HandlerFunc {
 		}
 		defer r.Body.Close()
 
-		input := payment.PaymentProcessed{}
+		input := paymentTask.ProcessPaymentTask{}
 		err := json.NewDecoder(r.Body).Decode(&input)
 		if err != nil {
 			http.Error(w, "Invalid request payload: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		payment, err := p.ProcessPayment(ctx, &input)
+		task, err := paymentTask.NewProcessPaymentTask(input)
+		if err != nil {
+			http.Error(w, "failed to create payment task: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		_, err = asynqClient.Enqueue(task)
 		if err != nil {
 			fmt.Println(err)
 			http.Error(w, "failed to process payment", http.StatusInternalServerError)
@@ -51,8 +54,7 @@ func paymentHandler(p *paymentProcessor.PaymentProcessor) http.HandlerFunc {
 		}
 
 		res := map[string]interface{}{
-			"message":     "payment request received",
-			"requestedAt": payment.RequestedAt,
+			"message": "payment scheduled to process",
 		}
 		json.NewEncoder(w).Encode(res)
 	}
