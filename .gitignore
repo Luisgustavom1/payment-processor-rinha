@@ -33,3 +33,5 @@ go.work.sum
 
 results/**
 **/venv/**
+
+/vibe-code-analyzer/*.png
