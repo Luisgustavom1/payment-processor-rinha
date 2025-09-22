@@ -5,9 +5,9 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY *.go ./
+COPY . ./
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o /payment-processor
+RUN CGO_ENABLED=0 GOOS=linux go build -C ./cmd/api -o /payment-processor
 
 # FROM build-stage AS run-test-stage
 # RUN go test -v ./...
