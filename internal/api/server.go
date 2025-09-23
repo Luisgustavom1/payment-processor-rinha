@@ -13,7 +13,7 @@ import (
 )
 
 func Setup(pp *paymentProcessor.PaymentProcessor, asynqClient *asynq.Client) *http.Server {
-	http.HandleFunc("/payments", paymentHandler(pp, asynqClient))
+	http.HandleFunc("/payments", paymentHandler(asynqClient))
 	http.HandleFunc("/payments-summary", paymentsSummaryHandler(pp))
 
 	fmt.Println("starting server running on port 9999")
@@ -23,7 +23,7 @@ func Setup(pp *paymentProcessor.PaymentProcessor, asynqClient *asynq.Client) *ht
 	}
 }
 
-func paymentHandler(p *paymentProcessor.PaymentProcessor, asynqClient *asynq.Client) http.HandlerFunc {
+func paymentHandler(asynqClient *asynq.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodPost {
