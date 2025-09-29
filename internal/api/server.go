@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
-	paymentProcessor "github.com/payment-processor-rinha/internal/application/payment"
+	paymentProcessor "github.com/payment-processor-rinha/internal/application/payment/processors"
 	paymentTask "github.com/payment-processor-rinha/internal/application/payment/tasks"
 )
 

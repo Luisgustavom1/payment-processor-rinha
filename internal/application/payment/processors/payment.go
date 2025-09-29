@@ -88,6 +88,8 @@ func (p *PaymentProcessor) ProcessTask(ctx context.Context, t *asynq.Task) error
 		}
 
 		tries++
+		secondsToWait := 2 * time.Second
+		time.Sleep(secondsToWait)
 		fmt.Println("retrying payment, attempt:", tries)
 	}
 
@@ -106,7 +108,7 @@ func (p *PaymentProcessor) SummaryPayments(ctx context.Context, from, to int64) 
 		return nil, fmt.Errorf("failed to get payments to summarize")
 	}
 
-	fmt.Println("found payment keys:", keys)
+	fmt.Println("found payment keys len:", len(keys))
 	if len(keys) == 0 {
 		return &res, nil
 	}

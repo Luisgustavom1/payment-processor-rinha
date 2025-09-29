@@ -12,7 +12,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/payment-processor-rinha/internal/api"
-	paymentProcessor "github.com/payment-processor-rinha/internal/application/payment"
+	paymentProcessor "github.com/payment-processor-rinha/internal/application/payment/processors"
 	paymentTask "github.com/payment-processor-rinha/internal/application/payment/tasks"
 	"github.com/redis/go-redis/v9"
 )
@@ -38,6 +38,9 @@ func main() {
 		asynq.Config{
 			Concurrency:     concurrency,
 			ShutdownTimeout: 30 * time.Second,
+			RetryDelayFunc: func(n int, e error, t *asynq.Task) time.Duration {
+				return time.Second * 2
+			},
 		},
 	)
 
