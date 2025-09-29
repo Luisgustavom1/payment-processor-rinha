@@ -10,10 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hibiken/asynq"
 	"github.com/payment-processor-rinha/internal/api"
 	paymentProcessor "github.com/payment-processor-rinha/internal/application/payment/processors"
-	paymentTask "github.com/payment-processor-rinha/internal/application/payment/tasks"
+	worker "github.com/payment-processor-rinha/internal/worker"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -33,27 +32,14 @@ func main() {
 		panic(err)
 	}
 
-	srv := asynq.NewServerFromRedisClient(
-		redisClient,
-		asynq.Config{
-			Concurrency:     concurrency,
-			ShutdownTimeout: 30 * time.Second,
-			RetryDelayFunc: func(n int, e error, t *asynq.Task) time.Duration {
-				return time.Second * 2
-			},
-		},
-	)
-
-	asynqClient := asynq.NewClientFromRedisClient(redisClient)
-	defer asynqClient.Close()
-
-	pp := paymentProcessor.NewPaymentProcessor(redisClient)
-	mux := asynq.NewServeMux()
-	mux.Handle(paymentTask.ProcessPayment, pp)
-
 	blockCh := make(chan error, 2)
+	queue := make(chan []byte, 10000)
+	pp := paymentProcessor.NewPaymentProcessor(redisClient)
+	wp := worker.NewWorker(pp, queue, concurrency)
 
-	httpServer := api.Setup(pp, asynqClient)
+	wp.StartWorker()
+
+	httpServer := api.Setup(pp, queue)
 	go func() {
 		err := httpServer.ListenAndServe()
 		if err != nil {
@@ -61,20 +47,11 @@ func main() {
 		}
 	}()
 
-	go func() {
-		fmt.Println("starting asynq server...")
-		if err := srv.Run(mux); err != nil {
-			blockCh <- fmt.Errorf("could not run server: %v", err)
-		}
-	}()
-
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
+	close(queue)
 	log.Println("shutting down servers...")
-
-	srv.Shutdown()
-	log.Println("asynq server shut down.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

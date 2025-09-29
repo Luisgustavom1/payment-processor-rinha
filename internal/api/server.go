@@ -4,16 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
-	"github.com/hibiken/asynq"
 	paymentProcessor "github.com/payment-processor-rinha/internal/application/payment/processors"
-	paymentTask "github.com/payment-processor-rinha/internal/application/payment/tasks"
 )
 
-func Setup(pp *paymentProcessor.PaymentProcessor, asynqClient *asynq.Client) *http.Server {
-	http.HandleFunc("/payments", paymentHandler(asynqClient))
+func Setup(pp *paymentProcessor.PaymentProcessor, queue chan []byte) *http.Server {
+	http.HandleFunc("/payments", paymentHandler(queue))
 	http.HandleFunc("/payments-summary", paymentsSummaryHandler(pp))
 
 	fmt.Println("starting server running on port 9999")
@@ -23,7 +22,7 @@ func Setup(pp *paymentProcessor.PaymentProcessor, asynqClient *asynq.Client) *ht
 	}
 }
 
-func paymentHandler(asynqClient *asynq.Client) http.HandlerFunc {
+func paymentHandler(queue chan []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodPost {
@@ -33,23 +32,15 @@ func paymentHandler(asynqClient *asynq.Client) http.HandlerFunc {
 		}
 		defer r.Body.Close()
 
-		input := paymentTask.ProcessPaymentTask{}
-		err := json.NewDecoder(r.Body).Decode(&input)
+		task, err := io.ReadAll(r.Body)
 		if err != nil {
-			http.Error(w, "Invalid request payload: "+err.Error(), http.StatusBadRequest)
+			http.Error(w, "Failed to read request body", http.StatusInternalServerError)
 			return
 		}
-
-		task, err := paymentTask.NewProcessPaymentTask(input)
-		if err != nil {
-			http.Error(w, "failed to create payment task: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		_, err = asynqClient.Enqueue(task)
-		if err != nil {
-			fmt.Println(err)
-			http.Error(w, "failed to process payment", http.StatusInternalServerError)
+		select {
+		case queue <- task:
+		default:
+			http.Error(w, "Queue is full", http.StatusServiceUnavailable)
 			return
 		}
 

@@ -10,7 +10,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/hibiken/asynq"
 	models "github.com/payment-processor-rinha/internal/application/payment/models"
 	tasks "github.com/payment-processor-rinha/internal/application/payment/tasks"
 	"github.com/redis/go-redis/v9"
@@ -39,19 +38,13 @@ func NewPaymentProcessor(cache *redis.Client) *PaymentProcessor {
 	}
 }
 
-func (p *PaymentProcessor) ProcessTask(ctx context.Context, t *asynq.Task) error {
-	input := tasks.ProcessPaymentTask{}
-	if err := json.Unmarshal(t.Payload(), &input); err != nil {
-		fmt.Println("failed to unmarshal payload:", err)
-		return err
-	}
-	log.Printf("processing payment cid %s\n", input.CorrelationId)
+func (p *PaymentProcessor) ProcessTask(ctx context.Context, task tasks.ProcessPaymentTask) error {
+	log.Printf("processing payment cid %s\n", task.CorrelationId)
 
-	tries := 0
 	now := time.Now()
-	input.RequestedAt = now.Format(time.RFC3339)
+	task.RequestedAt = now.Format(time.RFC3339)
 
-	jsonData, err := json.Marshal(input)
+	jsonData, err := json.Marshal(task)
 	if err != nil {
 		fmt.Println("failed to marshal payment:", err)
 		return err
@@ -59,7 +52,33 @@ func (p *PaymentProcessor) ProcessTask(ctx context.Context, t *asynq.Task) error
 
 	p.defaultUp = true
 	res := &http.Response{}
-	for tries <= 3 { // 2 tries to default + 2 tries do fallback
+	res, err = p.client.Post(p.baseURL()+"/payments", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		fmt.Println("failed to send request:", err)
+		return err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode == http.StatusOK {
+		err := p.savePayment(ctx, now, &task)
+		if err != nil {
+			fmt.Println("failed to save payment:", err)
+			return err
+		}
+		fmt.Printf("payment saved %s\n", task.CorrelationId)
+		return nil
+	}
+
+	if p.isRetryableError(res.StatusCode) {
+		err = fmt.Errorf("processing error status: %s", res.Status)
+		fmt.Println(err)
+		return err
+	}
+
+	e := res.StatusCode != http.StatusOK
+	if e {
+		p.defaultUp = false
+
 		res, err = p.client.Post(p.baseURL()+"/payments", "application/json", bytes.NewBuffer(jsonData))
 		if err != nil {
 			fmt.Println("failed to send request:", err)
@@ -68,32 +87,23 @@ func (p *PaymentProcessor) ProcessTask(ctx context.Context, t *asynq.Task) error
 		defer res.Body.Close()
 
 		if res.StatusCode == http.StatusOK {
-			err := p.savePayment(ctx, now, &input)
+			err := p.savePayment(ctx, now, &task)
 			if err != nil {
 				fmt.Println("failed to save payment:", err)
 				return err
 			}
-			fmt.Printf("payment saved %s\n", input.CorrelationId)
+			fmt.Printf("payment saved %s\n", task.CorrelationId)
 			return nil
 		}
 
-		if !p.isRetryableError(res.StatusCode) {
+		if p.isRetryableError(res.StatusCode) {
 			err = fmt.Errorf("processing error status: %s", res.Status)
 			fmt.Println(err)
 			return err
 		}
-
-		if !p.defaultUp && tries == 1 {
-			p.defaultUp = false
-		}
-
-		tries++
-		secondsToWait := 2 * time.Second
-		time.Sleep(secondsToWait)
-		fmt.Println("retrying payment, attempt:", tries)
 	}
 
-	return fmt.Errorf("failed to process payment: %s", res.Status)
+	return nil
 }
 
 func (p *PaymentProcessor) SummaryPayments(ctx context.Context, from, to int64) (*models.PaymentsSummaryResponse, error) {

@@ -1,11 +1,5 @@
 package payment
 
-import (
-	"encoding/json"
-
-	"github.com/hibiken/asynq"
-)
-
 type ProcessPaymentPayload struct {
 	CorrelationId string  `json:"correlationId"`
 	RequestedAt   string  `json:"requestedAt"`
@@ -15,16 +9,9 @@ type ProcessPaymentPayload struct {
 type ProcessPaymentTask struct {
 	ProcessPaymentPayload
 	OnDefault bool `json:"onDefault"`
+	Tries     int  `json:"tries"`
 }
 
 const (
 	ProcessPayment = "payment:process"
 )
-
-func NewProcessPaymentTask(task ProcessPaymentTask) (*asynq.Task, error) {
-	payload, err := json.Marshal(task)
-	if err != nil {
-		return nil, err
-	}
-	return asynq.NewTask(ProcessPayment, payload, asynq.MaxRetry(3)), nil
-}
