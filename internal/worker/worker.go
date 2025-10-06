@@ -2,10 +2,10 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
+	json "github.com/json-iterator/go"
 	paymentProcessor "github.com/payment-processor-rinha/internal/application/payment/processors"
 	paymentTask "github.com/payment-processor-rinha/internal/application/payment/tasks"
 )
@@ -37,7 +37,7 @@ func (wp *WorkerPool) StartWorker() {
 				err := json.Unmarshal(buff, &task)
 				if err != nil {
 					fmt.Printf("error when unmarshal task %s\n", err.Error())
-					continue
+					panic(err)
 				}
 
 				task.Tries++
@@ -47,6 +47,8 @@ func (wp *WorkerPool) StartWorker() {
 					if task.Tries < wp.maxRetries {
 						newBuff, _ := json.Marshal(task)
 						wp.queue <- newBuff
+					} else {
+						fmt.Printf("max retries reached for task %s\n", task.CorrelationId)
 					}
 				}
 			}

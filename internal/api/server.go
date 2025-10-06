@@ -2,12 +2,12 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
+	json "github.com/json-iterator/go"
 	paymentProcessor "github.com/payment-processor-rinha/internal/application/payment/processors"
 )
 
@@ -43,11 +43,7 @@ func paymentHandler(queue chan []byte) http.HandlerFunc {
 			http.Error(w, "Queue is full", http.StatusServiceUnavailable)
 			return
 		}
-
-		res := map[string]interface{}{
-			"message": "payment scheduled to process",
-		}
-		json.NewEncoder(w).Encode(res)
+		w.WriteHeader(http.StatusCreated)
 	}
 }
 
