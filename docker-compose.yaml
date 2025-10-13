@@ -21,6 +21,7 @@ services:
     environment:
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
+      - MASTER=true
     depends_on:
       - redis
     networks:
@@ -39,9 +40,9 @@ services:
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
 
   redis:
-    image: 'redis:alpine'
+    image: "redis:alpine"
     ports:
-      - '6379:6379'
+      - "6379:6379"
     networks:
       - api
     deploy:

@@ -10,15 +10,15 @@ import (
 	paymentTask "github.com/payment-processor-rinha/internal/application/payment/tasks"
 )
 
-type WorkerPool struct {
+type PaymentWorkerPool struct {
 	pp          *paymentProcessor.PaymentProcessor
 	concurrency int
 	queue       chan []byte
 	maxRetries  int
 }
 
-func NewWorker(pp *paymentProcessor.PaymentProcessor, queue chan []byte, concurrency int) *WorkerPool {
-	return &WorkerPool{
+func NewPaymentWorker(pp *paymentProcessor.PaymentProcessor, queue chan []byte, concurrency int) *PaymentWorkerPool {
+	return &PaymentWorkerPool{
 		pp:          pp,
 		concurrency: concurrency,
 		queue:       queue,
@@ -26,13 +26,17 @@ func NewWorker(pp *paymentProcessor.PaymentProcessor, queue chan []byte, concurr
 	}
 }
 
-func (wp *WorkerPool) StartWorker() {
+func (wp *PaymentWorkerPool) StartPaymentWorker() {
 	for i := range wp.concurrency {
 		ctx := context.Background()
 		ctx.Value(i)
-
 		go func() {
 			for buff := range wp.queue {
+				if !wp.pp.IsUp() {
+					// fmt.Printf("payment processor is down")
+					continue
+				}
+
 				task := paymentTask.ProcessPaymentTask{}
 				err := json.Unmarshal(buff, &task)
 				if err != nil {
@@ -44,12 +48,8 @@ func (wp *WorkerPool) StartWorker() {
 				if err := wp.pp.ProcessTask(ctx, task); err != nil {
 					toWait := time.Duration(task.Tries) * time.Second
 					time.Sleep(toWait)
-					if task.Tries < wp.maxRetries {
-						newBuff, _ := json.Marshal(task)
-						wp.queue <- newBuff
-					} else {
-						fmt.Printf("max retries reached for task %s\n", task.CorrelationId)
-					}
+					newBuff, _ := json.Marshal(task)
+					wp.queue <- newBuff
 				}
 			}
 		}()

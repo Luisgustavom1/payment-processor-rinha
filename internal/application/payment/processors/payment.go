@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	json "github.com/json-iterator/go"
@@ -14,33 +16,45 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type HealthCheckResponse struct {
-	Failing         bool `json:"failing"`
-	MinResponseTime int  `json:"minResponseTime"`
-}
-
 type PaymentProcessor struct {
 	client      *http.Client
 	cache       *redis.Client
 	defaultURL  string
 	fallbackURL string
-	defaultUp   bool
+	up          bool
+	upMutex     sync.RWMutex
 }
 
-func NewPaymentProcessor(cache *redis.Client) *PaymentProcessor {
+func NewPaymentProcessor(ctx context.Context, cache *redis.Client) *PaymentProcessor {
+	upCached := cache.Get(ctx, HEALTH_CHECK_KEY)
+	up, _ := upCached.Bool()
+
+	fmt.Printf("initializing up with %t\n", up)
+
 	return &PaymentProcessor{
 		client:      &http.Client{},
 		cache:       cache,
 		defaultURL:  os.Getenv("PROCESSOR_DEFAULT_URL"),
 		fallbackURL: os.Getenv("PROCESSOR_FALLBACK_URL"),
-		defaultUp:   true,
+		up:          up,
 	}
 }
 
-func (p *PaymentProcessor) ProcessTask(ctx context.Context, task tasks.ProcessPaymentTask) error {
-	// log.Printf("processing payment cid %s\n", task.CorrelationId)
+func (p *PaymentProcessor) IsUp() bool {
+	p.upMutex.RLock()
+	defer p.upMutex.RUnlock()
+	return p.up
+}
 
-	now := time.Now()
+func (p *PaymentProcessor) SetUp(status bool) {
+	p.upMutex.Lock()
+	defer p.upMutex.Unlock()
+	p.up = status
+}
+
+func (p *PaymentProcessor) ProcessTask(ctx context.Context, task tasks.ProcessPaymentTask) error {
+	// fmt.Printf("processing payment cid %s\n", task.CorrelationId\)
+	now := time.Now().UTC()
 	task.RequestedAt = now.Format(time.RFC3339)
 
 	jsonData, err := json.Marshal(task)
@@ -50,7 +64,6 @@ func (p *PaymentProcessor) ProcessTask(ctx context.Context, task tasks.ProcessPa
 		return err
 	}
 
-	p.defaultUp = true
 	res := &http.Response{}
 	res, err = p.client.Post(p.baseURL()+"/payments", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -58,6 +71,12 @@ func (p *PaymentProcessor) ProcessTask(ctx context.Context, task tasks.ProcessPa
 		return err
 	}
 	defer res.Body.Close()
+
+	if p.isRetryableError(res.StatusCode) {
+		err = fmt.Errorf("processing error status: %s %s", res.Status, res.Body)
+		fmt.Println(err)
+		return err
+	}
 
 	if res.StatusCode == http.StatusOK {
 		err := p.savePayment(ctx, now, &task)
@@ -67,12 +86,6 @@ func (p *PaymentProcessor) ProcessTask(ctx context.Context, task tasks.ProcessPa
 		}
 		// fmt.Printf("payment saved %s\n", task.CorrelationId)
 		return nil
-	}
-
-	if p.isRetryableError(res.StatusCode) {
-		err = fmt.Errorf("processing error status: %s", res.Status)
-		fmt.Println(err)
-		return err
 	}
 
 	return nil
@@ -121,35 +134,21 @@ func (p *PaymentProcessor) SummaryPayments(ctx context.Context, from, to int64) 
 		res.Fallback.TotalAmount += payment.Amount
 	}
 
+	res.Default.TotalAmount = math.Round(res.Default.TotalAmount*10) / 10
+	res.Fallback.TotalAmount = math.Round(res.Fallback.TotalAmount*10) / 10
+
 	return &res, nil
 }
 
-func (p *PaymentProcessor) HealthCheck() (*HealthCheckResponse, error) {
-	resp, err := p.client.Get(p.baseURL() + "/payments/service-health")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	healthCheckRes := HealthCheckResponse{}
-	if err := json.NewDecoder(resp.Body).Decode(&healthCheckRes); err != nil {
-		return nil, err
-	}
-	return &healthCheckRes, nil
-}
-
 func (p *PaymentProcessor) baseURL() string {
-	if p.defaultUp {
+	if p.IsUp() {
 		return p.defaultURL
 	}
 	return p.fallbackURL
 }
 
-func (p *PaymentProcessor) getPaymentKey(correlationId *string) string {
-	if correlationId == nil {
-		return "payments:*"
-	}
-	return "payments:" + *correlationId
+func (p *PaymentProcessor) getPaymentKey(correlationId string) string {
+	return "payments:" + correlationId
 }
 
 func (p *PaymentProcessor) getPaymentsIndexKey() string {
@@ -157,17 +156,17 @@ func (p *PaymentProcessor) getPaymentsIndexKey() string {
 }
 
 func (p *PaymentProcessor) savePayment(ctx context.Context, now time.Time, payload *tasks.ProcessPaymentTask) error {
-	payload.OnDefault = p.defaultUp
+	payload.OnDefault = p.IsUp()
 	j, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("error on marshalling processed payment: %w", err)
 	}
 
-	k := p.getPaymentKey(&payload.CorrelationId)
+	k := p.getPaymentKey(payload.CorrelationId)
 	pipe := p.cache.TxPipeline()
 	pipe.Set(ctx, k, j, 0)
 	pipe.ZAdd(ctx, p.getPaymentsIndexKey(), redis.Z{
-		Score:  float64(now.Unix()),
+		Score:  float64(now.UnixMilli()),
 		Member: k,
 	})
 	_, err = pipe.Exec(ctx)
