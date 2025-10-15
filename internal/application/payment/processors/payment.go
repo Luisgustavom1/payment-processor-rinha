@@ -75,6 +75,7 @@ func (p *PaymentProcessor) ProcessTask(ctx context.Context, task tasks.ProcessPa
 	if p.isRetryableError(res.StatusCode) {
 		err = fmt.Errorf("processing error status: %s %s", res.Status, res.Body)
 		fmt.Println(err)
+		p.SetUp(false)
 		return err
 	}
 
@@ -84,7 +85,6 @@ func (p *PaymentProcessor) ProcessTask(ctx context.Context, task tasks.ProcessPa
 			fmt.Println("failed to save payment:", err)
 			return err
 		}
-		// fmt.Printf("payment saved %s\n", task.CorrelationId)
 		return nil
 	}
 

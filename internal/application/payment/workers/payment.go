@@ -33,7 +33,7 @@ func (wp *PaymentWorkerPool) StartPaymentWorker() {
 		go func() {
 			for buff := range wp.queue {
 				if !wp.pp.IsUp() {
-					// fmt.Printf("payment processor is down")
+					// fmt.Println("payment processor is down")
 					continue
 				}
 
@@ -44,12 +44,9 @@ func (wp *PaymentWorkerPool) StartPaymentWorker() {
 					panic(err)
 				}
 
-				task.Tries++
 				if err := wp.pp.ProcessTask(ctx, task); err != nil {
-					toWait := time.Duration(task.Tries) * time.Second
-					time.Sleep(toWait)
-					newBuff, _ := json.Marshal(task)
-					wp.queue <- newBuff
+					time.Sleep(2 * time.Second)
+					wp.queue <- buff
 				}
 			}
 		}()

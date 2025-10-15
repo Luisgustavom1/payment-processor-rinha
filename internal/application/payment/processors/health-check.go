@@ -14,7 +14,6 @@ type HealthCheckResponse struct {
 }
 
 func (p *PaymentProcessor) HealthCheck(ctx context.Context, masterInstance bool) {
-	fmt.Println("checking by health check")
 	if masterInstance {
 		resp, err := p.client.Get(p.baseURL() + "/payments/service-health")
 		if err != nil {
@@ -29,6 +28,7 @@ func (p *PaymentProcessor) HealthCheck(ctx context.Context, masterInstance bool)
 			return
 		}
 
+		fmt.Println("health check response:", healthCheckRes)
 		p.cache.Set(ctx, HEALTH_CHECK_KEY, !healthCheckRes.Failing, 0)
 		p.SetUp(!healthCheckRes.Failing)
 		return

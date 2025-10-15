@@ -39,7 +39,6 @@ func paymentHandler(queue chan []byte) http.HandlerFunc {
 		}
 		select {
 		case queue <- task:
-			// fmt.Println("task enqueued")
 		default:
 			http.Error(w, "Queue is full", http.StatusServiceUnavailable)
 			return
@@ -64,6 +63,7 @@ func paymentsSummaryHandler(p *paymentProcessor.PaymentProcessor) http.HandlerFu
 		from := parseRequestedAt(q.Get("from")).UTC().UnixMilli()
 		to := parseRequestedAt(q.Get("to")).UTC().UnixMilli()
 
+		fmt.Printf("from %d to %d\n", from, to)
 		res, err := p.SummaryPayments(ctx, from, to)
 		if err != nil {
 			http.Error(w, "failed to get payments summary", http.StatusInternalServerError)
