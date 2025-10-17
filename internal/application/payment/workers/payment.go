@@ -23,7 +23,7 @@ func NewPaymentWorker(pp *paymentProcessor.PaymentProcessor, queue chan []byte, 
 		pp:          pp,
 		concurrency: concurrency,
 		queue:       queue,
-		maxRetries:  3,
+		maxRetries:  5,
 	}
 }
 
@@ -63,7 +63,7 @@ func (wp *PaymentWorkerPool) StartPaymentWorker() {
 	}
 }
 
-const baseDelay = 500 * time.Millisecond
+const baseDelay = 1 * time.Second
 const jitter = 100 * time.Millisecond
 
 func performBackoffWithJitter(tries int) {
@@ -77,6 +77,6 @@ func performBackoffWithJitter(tries int) {
 	// evict "thundering herd"
 	randomJitter := time.Duration(rand.Intn(int(jitter)))
 	totalWait := backoff + randomJitter
-	fmt.Printf("Tentativa #%d: Esperando por %v (Backoff: %v + Jitter: %v)\n", tries, totalWait, backoff, randomJitter)
+	fmt.Printf("#%d - backoff: %v + Jitter: %v = %v\n", tries, backoff, randomJitter, totalWait)
 	time.Sleep(totalWait)
 }

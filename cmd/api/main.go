@@ -43,7 +43,7 @@ func main() {
 	})
 	defer redisClient.Close()
 
-	concurrency, err := strconv.Atoi(getEnv("CONCURRENCY", "20"))
+	concurrency, err := strconv.Atoi(getEnv("CONCURRENCY", "10"))
 	if err != nil {
 		panic(err)
 	}
