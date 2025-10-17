@@ -55,7 +55,7 @@ func (p *PaymentProcessor) SetUp(status bool) {
 func (p *PaymentProcessor) ProcessTask(ctx context.Context, task tasks.ProcessPaymentTask) error {
 	// fmt.Printf("processing payment cid %s\n", task.CorrelationId)
 	now := time.Now().UTC()
-	task.RequestedAt = now.Format(time.RFC3339)
+	task.RequestedAt = now.Format(time.RFC3339Nano)
 
 	jsonData, err := json.Marshal(task)
 
