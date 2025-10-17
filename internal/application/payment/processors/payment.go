@@ -53,7 +53,7 @@ func (p *PaymentProcessor) SetUp(status bool) {
 }
 
 func (p *PaymentProcessor) ProcessTask(ctx context.Context, task tasks.ProcessPaymentTask) error {
-	// fmt.Printf("processing payment cid %s\n", task.CorrelationId\)
+	// fmt.Printf("processing payment cid %s\n", task.CorrelationId)
 	now := time.Now().UTC()
 	task.RequestedAt = now.Format(time.RFC3339)
 
@@ -75,7 +75,6 @@ func (p *PaymentProcessor) ProcessTask(ctx context.Context, task tasks.ProcessPa
 	if p.isRetryableError(res.StatusCode) {
 		err = fmt.Errorf("processing error status: %s %s", res.Status, res.Body)
 		fmt.Println(err)
-		p.SetUp(false)
 		return err
 	}
 
@@ -83,7 +82,7 @@ func (p *PaymentProcessor) ProcessTask(ctx context.Context, task tasks.ProcessPa
 		err := p.savePayment(ctx, now, &task)
 		if err != nil {
 			fmt.Println("failed to save payment:", err)
-			return err
+			return nil
 		}
 		return nil
 	}
@@ -103,7 +102,7 @@ func (p *PaymentProcessor) SummaryPayments(ctx context.Context, from, to int64) 
 		return nil, fmt.Errorf("failed to get payments to summarize")
 	}
 
-	fmt.Println("found payment keys len:", len(keys))
+	fmt.Println("payments len:", len(keys))
 	if len(keys) == 0 {
 		return &res, nil
 	}

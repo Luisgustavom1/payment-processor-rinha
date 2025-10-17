@@ -21,7 +21,6 @@ services:
     environment:
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
-      - MASTER=true
     depends_on:
       - redis
     networks:
@@ -30,14 +29,18 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.55"
-          memory: "145MB"
+          cpus: "0.35"
+          memory: "95MB"
 
   api2:
     <<: *api
     environment:
+      - MASTER=true
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
+
+  api3:
+    <<: *api
 
   redis:
     image: "redis:alpine"

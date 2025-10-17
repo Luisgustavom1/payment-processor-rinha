@@ -24,11 +24,26 @@ func main() {
 		Addr:     redisAddr,
 		Password: "",
 		DB:       0,
-		Protocol: 2,
+		Protocol: 3,
+
+		PoolSize:        50,
+		PoolTimeout:     10 * time.Second,
+		MinIdleConns:    10,
+		MaxIdleConns:    20,
+		ConnMaxLifetime: 30 * time.Minute,
+		ConnMaxIdleTime: 5 * time.Minute,
+
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+
+		MaxRetries:      3,
+		MinRetryBackoff: 8 * time.Millisecond,
+		MaxRetryBackoff: 512 * time.Millisecond,
 	})
 	defer redisClient.Close()
 
-	concurrency, err := strconv.Atoi(getEnv("CONCURRENCY", "25"))
+	concurrency, err := strconv.Atoi(getEnv("CONCURRENCY", "20"))
 	if err != nil {
 		panic(err)
 	}

@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"time"
 
 	json "github.com/json-iterator/go"
@@ -32,9 +33,8 @@ func (wp *PaymentWorkerPool) StartPaymentWorker() {
 		ctx.Value(i)
 		go func() {
 			for buff := range wp.queue {
-				if !wp.pp.IsUp() {
-					// fmt.Println("payment processor is down")
-					continue
+				for !wp.pp.IsUp() {
+					time.Sleep(time.Millisecond * 100)
 				}
 
 				task := paymentTask.ProcessPaymentTask{}
@@ -44,11 +44,39 @@ func (wp *PaymentWorkerPool) StartPaymentWorker() {
 					panic(err)
 				}
 
-				if err := wp.pp.ProcessTask(ctx, task); err != nil {
-					time.Sleep(2 * time.Second)
-					wp.queue <- buff
+				tries := 0
+				for {
+					tries++
+					if tries > wp.maxRetries {
+						fmt.Printf("max retries reached for task %s\n", task.CorrelationId)
+						break
+					}
+
+					if err := wp.pp.ProcessTask(ctx, task); err == nil {
+						break
+					}
+
+					performBackoffWithJitter(tries)
 				}
 			}
 		}()
 	}
+}
+
+const baseDelay = 500 * time.Millisecond
+const jitter = 100 * time.Millisecond
+
+func performBackoffWithJitter(tries int) {
+	if tries < 1 {
+		tries = 1
+	}
+
+	// baseDelay * 2^(n-1)
+	backoff := baseDelay * time.Duration(1<<(tries-1))
+
+	// evict "thundering herd"
+	randomJitter := time.Duration(rand.Intn(int(jitter)))
+	totalWait := backoff + randomJitter
+	fmt.Printf("Tentativa #%d: Esperando por %v (Backoff: %v + Jitter: %v)\n", tries, totalWait, backoff, randomJitter)
+	time.Sleep(totalWait)
 }

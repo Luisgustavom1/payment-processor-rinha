@@ -28,7 +28,7 @@ func (p *PaymentProcessor) HealthCheck(ctx context.Context, masterInstance bool)
 			return
 		}
 
-		fmt.Println("health check response:", healthCheckRes)
+		fmt.Println("hc res", healthCheckRes)
 		p.cache.Set(ctx, HEALTH_CHECK_KEY, !healthCheckRes.Failing, 0)
 		p.SetUp(!healthCheckRes.Failing)
 		return
@@ -36,5 +36,6 @@ func (p *PaymentProcessor) HealthCheck(ctx context.Context, masterInstance bool)
 
 	upCached := p.cache.Get(ctx, HEALTH_CHECK_KEY)
 	up, _ := upCached.Bool()
+	fmt.Println("hc res", up)
 	p.SetUp(up)
 }
