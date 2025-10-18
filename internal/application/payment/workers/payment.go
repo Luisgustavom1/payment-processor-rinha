@@ -64,7 +64,7 @@ func (wp *PaymentWorkerPool) StartPaymentWorker() {
 }
 
 const baseDelay = 1 * time.Second
-const jitter = 100 * time.Millisecond
+const jitter = 250 * time.Millisecond
 
 func performBackoffWithJitter(tries int) {
 	if tries < 1 {
@@ -77,6 +77,5 @@ func performBackoffWithJitter(tries int) {
 	// evict "thundering herd"
 	randomJitter := time.Duration(rand.Intn(int(jitter)))
 	totalWait := backoff + randomJitter
-	fmt.Printf("#%d - backoff: %v + Jitter: %v = %v\n", tries, backoff, randomJitter, totalWait)
 	time.Sleep(totalWait)
 }
