@@ -21,6 +21,7 @@ services:
     environment:
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
+      - QUEUE_MAX_SIZE=20000
     depends_on:
       - redis
     networks:
@@ -38,6 +39,7 @@ services:
       - MASTER=true
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
+      - QUEUE_MAX_SIZE=20000
 
   api3:
     <<: *api

@@ -27,12 +27,20 @@ func NewPaymentWorker(pp *paymentProcessor.PaymentProcessor, queue chan []byte, 
 	}
 }
 
-func (wp *PaymentWorkerPool) StartPaymentWorker() {
+var lastQueueAnalysis = time.Now()
+
+func (wp *PaymentWorkerPool) StartPaymentWorker(queueMaxSize int) {
 	for i := range wp.concurrency {
 		ctx := context.Background()
 		ctx.Value(i)
 		go func() {
 			for buff := range wp.queue {
+				ql := len(wp.queue)
+				if time.Since(lastQueueAnalysis) > time.Second*3 && float64(ql) >= float64(queueMaxSize)*0.9 {
+					fmt.Printf("queue is almost full %d\n", ql)
+					lastQueueAnalysis = time.Now()
+				}
+
 				for !wp.pp.IsUp() {
 					time.Sleep(time.Millisecond * 100)
 				}

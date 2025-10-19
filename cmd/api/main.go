@@ -53,12 +53,18 @@ func main() {
 		panic(err)
 	}
 
+	queueMaxSize, err := strconv.Atoi(getEnv("QUEUE_MAX_SIZE", "10000"))
+	fmt.Printf("queue max size: %d\n", queueMaxSize)
+	if err != nil {
+		panic(err)
+	}
+
 	blockCh := make(chan error, 2)
-	queue := make(chan []byte, 10000)
+	queue := make(chan []byte, queueMaxSize)
 	pp := paymentProcessor.NewPaymentProcessor(ctx, redisClient)
 
 	pw := worker.NewPaymentWorker(pp, queue, concurrency)
-	pw.StartPaymentWorker()
+	pw.StartPaymentWorker(queueMaxSize)
 
 	hcw := worker.NewHealthCheckPool(pp)
 	hcw.StartHealthCheckWorker(master)
